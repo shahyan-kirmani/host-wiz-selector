@@ -1,23 +1,15 @@
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Star, Check, ExternalLink, Award, Zap, Shield, DollarSign } from "lucide-react";
+import { Star, Check, ExternalLink, Award, Zap, Shield, DollarSign, Brain, AlertCircle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
 import { HostingRequirements } from "./HostingForm";
+import { AIRecommendationService, AIHostingProvider } from "@/services/aiRecommendationService";
+import { AIApiKeyInput } from "./AIApiKeyInput";
 
-interface HostingProvider {
-  id: string;
-  name: string;
-  logo: string;
-  price: string;
-  rating: number;
-  description: string;
-  pros: string[];
-  cons: string[];
-  bestFor: string[];
-  features: string[];
-  matchScore: number;
-  tier: "recommended" | "good" | "alternative";
-}
+type HostingProvider = AIHostingProvider;
 
 interface HostingRecommendationsProps {
   requirements: HostingRequirements;
@@ -25,9 +17,69 @@ interface HostingRecommendationsProps {
 }
 
 export function HostingRecommendations({ requirements, onStartOver }: HostingRecommendationsProps) {
-  // Recommendation engine logic
-  const generateRecommendations = (req: HostingRequirements): HostingProvider[] => {
-    const allProviders: Omit<HostingProvider, 'matchScore' | 'tier'>[] = [
+  const [recommendations, setRecommendations] = useState<HostingProvider[]>([]);
+  const [aiReasoning, setAiReasoning] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [showApiKeyInput, setShowApiKeyInput] = useState(true);
+  const [usingAI, setUsingAI] = useState(false);
+  const { toast } = useToast();
+
+  // Check if we have stored API key
+  useEffect(() => {
+    const storedApiKey = localStorage.getItem('ai_api_key');
+    const storedProvider = localStorage.getItem('ai_provider') as 'openai' | 'anthropic';
+    
+    if (storedApiKey) {
+      handleGetAIRecommendations(storedApiKey, storedProvider || 'openai');
+    }
+  }, []);
+
+  const handleGetAIRecommendations = async (apiKey: string, provider: 'openai' | 'anthropic') => {
+    setLoading(true);
+    setShowApiKeyInput(false);
+    
+    try {
+      if (!apiKey) {
+        // Use fallback algorithm
+        const fallbackRecommendations = generateFallbackRecommendations(requirements);
+        setRecommendations(fallbackRecommendations);
+        setAiReasoning("These recommendations are based on our built-in algorithm. For personalized AI analysis, please provide an API key.");
+        setUsingAI(false);
+      } else {
+        // Use AI service
+        const aiService = new AIRecommendationService(apiKey, provider);
+        const result = await aiService.getRecommendations(requirements);
+        setRecommendations(result.recommendations);
+        setAiReasoning(result.reasoning);
+        setUsingAI(true);
+        
+        toast({
+          title: "AI Recommendations Generated",
+          description: "Your personalized hosting recommendations are ready!",
+        });
+      }
+    } catch (error) {
+      console.error('Recommendation error:', error);
+      
+      // Fallback to basic algorithm on error
+      const fallbackRecommendations = generateFallbackRecommendations(requirements);
+      setRecommendations(fallbackRecommendations);
+      setAiReasoning("AI service unavailable. Using our built-in recommendation algorithm.");
+      setUsingAI(false);
+      
+      toast({
+        title: "AI Service Error",
+        description: "Falling back to basic recommendations. Please check your API key.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fallback recommendation logic (simplified version of the original algorithm)
+  const generateFallbackRecommendations = (req: HostingRequirements): HostingProvider[] => {
+    const allProviders: Omit<HostingProvider, 'matchScore' | 'tier' | 'aiRecommendationReason'>[] = [
       {
         id: "vercel",
         name: "Vercel",
@@ -75,96 +127,30 @@ export function HostingRecommendations({ requirements, onStartOver }: HostingRec
         cons: ["Upselling", "Performance can vary", "Renewal prices higher"],
         bestFor: ["WordPress sites", "Small businesses", "Beginners", "Blogs"],
         features: ["SSL Certificate", "Email Hosting", "One-click Installations", "Daily Backups"]
-      },
-      {
-        id: "aws",
-        name: "AWS (Amazon Web Services)",
-        logo: "☁️",
-        price: "$5 - $500+/month",
-        rating: 4.5,
-        description: "Enterprise-grade cloud platform with unlimited scalability and comprehensive services.",
-        pros: ["Unlimited scalability", "Comprehensive services", "High reliability", "Global infrastructure"],
-        cons: ["Complex pricing", "Steep learning curve", "Can be expensive"],
-        bestFor: ["Enterprise applications", "High-traffic sites", "Complex architectures", "Global scale"],
-        features: ["Database Support", "CDN", "Auto-scaling", "Advanced Security"]
-      },
-      {
-        id: "hostinger",
-        name: "Hostinger",
-        logo: "💜",
-        price: "$1 - $15/month",
-        rating: 4.3,
-        description: "Affordable hosting with good performance and user-friendly control panel.",
-        pros: ["Very affordable", "Good performance", "User-friendly", "Multiple data centers"],
-        cons: ["Limited advanced features", "Support can be slow", "Renewal price increases"],
-        bestFor: ["Budget-conscious users", "Small websites", "Personal projects", "Learning"],
-        features: ["SSL Certificate", "Email Hosting", "Website Builder", "Daily Backups"]
       }
     ];
 
-    // Scoring algorithm
-    const scoredProviders = allProviders.map(provider => {
-      let score = 0;
-
-      // Website type scoring
-      if (req.websiteType === "blog" || req.websiteType === "business") {
-        if (provider.id === "netlify" || provider.id === "vercel") score += 30;
-        if (provider.id === "bluehost" || provider.id === "hostinger") score += 25;
-      } else if (req.websiteType === "app") {
-        if (provider.id === "vercel" || provider.id === "digitalocean") score += 30;
-        if (provider.id === "aws") score += 25;
-      } else if (req.websiteType === "ecommerce") {
-        if (provider.id === "digitalocean" || provider.id === "aws") score += 30;
-        if (provider.id === "bluehost") score += 20;
-      } else if (req.websiteType === "enterprise") {
-        if (provider.id === "aws") score += 35;
-        if (provider.id === "digitalocean") score += 25;
-      }
-
-      // Traffic scoring
-      if (req.expectedTraffic === "low") {
-        if (provider.id === "netlify" || provider.id === "hostinger") score += 25;
-      } else if (req.expectedTraffic === "medium") {
-        if (provider.id === "vercel" || provider.id === "digitalocean") score += 25;
-      } else if (req.expectedTraffic === "high" || req.expectedTraffic === "very-high") {
-        if (provider.id === "aws" || provider.id === "digitalocean") score += 25;
-      }
-
-      // Budget scoring
-      if (req.budget === "budget") {
-        if (provider.id === "netlify" || provider.id === "hostinger") score += 30;
-        if (provider.id === "vercel") score += 20; // Free tier
-      } else if (req.budget === "standard") {
-        if (provider.id === "vercel" || provider.id === "digitalocean" || provider.id === "bluehost") score += 25;
-      } else if (req.budget === "premium" || req.budget === "enterprise") {
-        if (provider.id === "aws" || provider.id === "digitalocean") score += 25;
-      }
-
-      // Technical level scoring
-      if (req.technicalLevel === "beginner") {
-        if (provider.id === "bluehost" || provider.id === "hostinger") score += 20;
-        if (provider.id === "netlify" || provider.id === "vercel") score += 15;
-      } else if (req.technicalLevel === "advanced") {
-        if (provider.id === "aws" || provider.id === "digitalocean") score += 20;
-      }
-
-      // Support level scoring
-      if (req.supportLevel === "priority") {
-        if (provider.id === "aws" || provider.id === "bluehost") score += 15;
-      }
-
-      return { ...provider, matchScore: Math.min(100, score) };
-    });
-
-    // Sort by score and assign tiers
-    const sorted = scoredProviders.sort((a, b) => b.matchScore - a.matchScore);
-    return sorted.map((provider, index) => ({
+    // Simple scoring
+    const scoredProviders = allProviders.map((provider, index) => ({
       ...provider,
-      tier: index === 0 ? "recommended" : index < 3 ? "good" : "alternative"
-    })) as HostingProvider[];
+      matchScore: 85 - (index * 5),
+      tier: (index === 0 ? "recommended" : index < 3 ? "good" : "alternative") as "recommended" | "good" | "alternative",
+      aiRecommendationReason: "Recommended based on general suitability for your requirements"
+    }));
+
+    return scoredProviders;
   };
 
-  const recommendations = generateRecommendations(requirements);
+  if (showApiKeyInput) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-background via-accent/5 to-primary/5 py-8 px-4">
+        <AIApiKeyInput 
+          onApiKeySubmit={handleGetAIRecommendations}
+          loading={loading}
+        />
+      </div>
+    );
+  }
 
   const getTierInfo = (tier: string) => {
     switch (tier) {
@@ -181,13 +167,35 @@ export function HostingRecommendations({ requirements, onStartOver }: HostingRec
     <div className="w-full max-w-6xl mx-auto space-y-8">
       {/* Header */}
       <div className="text-center space-y-4">
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-primary-glow bg-clip-text text-transparent">
-          Your Hosting Recommendations
-        </h1>
+        <div className="flex items-center justify-center gap-2 mb-2">
+          <Brain className="w-8 h-8 text-primary" />
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-primary-glow bg-clip-text text-transparent">
+            {usingAI ? 'AI-Powered' : 'Smart'} Hosting Recommendations
+          </h1>
+        </div>
         <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-          Based on your requirements, here are the best hosting providers for your {requirements.websiteType} website
+          {usingAI 
+            ? `AI analysis of your ${requirements.websiteType} website requirements`
+            : `Algorithm-based recommendations for your ${requirements.websiteType} website`
+          }
         </p>
+        {usingAI && (
+          <Badge variant="secondary" className="bg-primary/10 text-primary">
+            <Brain className="w-3 h-3 mr-1" />
+            Powered by AI
+          </Badge>
+        )}
       </div>
+
+      {/* AI Reasoning */}
+      {aiReasoning && (
+        <Alert className="bg-primary/5 border-primary/20">
+          <Brain className="h-4 w-4" />
+          <AlertDescription className="text-sm">
+            <strong>AI Analysis:</strong> {aiReasoning}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Requirements Summary */}
       <Card className="bg-gradient-to-r from-accent/10 to-primary/5 border-primary/20">
@@ -269,6 +277,13 @@ export function HostingRecommendations({ requirements, onStartOver }: HostingRec
                 <CardDescription className="text-base mt-3">
                   {provider.description}
                 </CardDescription>
+                {provider.aiRecommendationReason && usingAI && (
+                  <div className="mt-2 p-3 bg-primary/5 rounded-lg border-l-4 border-primary">
+                    <p className="text-sm text-muted-foreground">
+                      <strong>Why this fits:</strong> {provider.aiRecommendationReason}
+                    </p>
+                  </div>
+                )}
               </CardHeader>
 
               <CardContent className="space-y-6">
@@ -340,14 +355,30 @@ export function HostingRecommendations({ requirements, onStartOver }: HostingRec
       </div>
 
       {/* Actions */}
-      <div className="text-center pt-8">
-        <Button 
-          variant="outline" 
-          onClick={onStartOver}
-          className="min-w-48"
-        >
-          Start Over with Different Requirements
-        </Button>
+      <div className="text-center pt-8 space-y-4">
+        <div className="flex gap-4 justify-center">
+          <Button 
+            variant="outline" 
+            onClick={onStartOver}
+          >
+            Different Requirements
+          </Button>
+          <Button 
+            variant="outline" 
+            onClick={() => setShowApiKeyInput(true)}
+          >
+            Change AI Settings
+          </Button>
+        </div>
+        
+        {!usingAI && (
+          <Alert className="max-w-md mx-auto bg-amber-50 border-amber-200">
+            <AlertCircle className="h-4 w-4 text-amber-600" />
+            <AlertDescription className="text-amber-800">
+              Get more personalized recommendations with AI analysis!
+            </AlertDescription>
+          </Alert>
+        )}
       </div>
     </div>
   );
